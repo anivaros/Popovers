@@ -88,7 +88,10 @@ public struct WindowReader<Content: View>: View {
 
             DispatchQueue.main.async {
                 /// Set the window.
-                self.windowViewModel.window = self.window
+
+                if self.windowViewModel.window !== self.window {
+                    self.windowViewModel.window = self.window
+                }
             }
         }
     }

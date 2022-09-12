@@ -140,6 +140,155 @@ struct PopoverModifier: ViewModifier {
 }
 
 /**
+ Present a popover that can transition to another popover in SwiftUI. Access using `.popover(item:attributes:view:)`.
+ */
+struct PopoverWithItemModifier: ViewModifier {
+
+    private let popoverWithItemView: AnyView
+
+    /// Create a popover with a background. Use `.popover(present:attributes:view:background:)` to access.
+    init<Item: Identifiable, MainContent: View, BackgroundContent: View>(
+        item: Binding<Item?>,
+        buildAttributes: @escaping ((inout Popover.Attributes) -> Void) = { _ in },
+        @ViewBuilder view: @escaping (Item) -> MainContent,
+        @ViewBuilder background: @escaping (() -> BackgroundContent)
+    ) {
+        self.popoverWithItemView = AnyView(PopoverWithItemView(item: item, buildAttributes: buildAttributes, view: view, background: background))
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .background(popoverWithItemView)
+    }
+}
+/**
+ Present a popover that can transition to another popover in SwiftUI. Access using `.popover(item:attributes:view:)`.
+ */
+struct PopoverWithItemView<Item: Identifiable, MainContent: View, BackgroundContent: View>: View {
+    /**
+     Binding to the popover's presentation state.
+
+     Set to `true` to present, `false` to dismiss.
+     */
+    @Binding var item: Item?
+
+    /// Build the attributes.
+    let buildAttributes: (inout Popover.Attributes) -> Void
+
+    /// The popover's view.
+    let view: (Item) -> MainContent
+
+    /// The popover's background.
+    let background: () -> BackgroundContent
+
+    /// Reference to the popover.
+    @State var popover: Popover?
+
+    /// The source frame to present from. Calculated by reading the frame of whatever view the modifier is attached to.
+    @State var sourceFrame: CGRect?
+
+    /// Create a popover with a background. Use `.popover(present:attributes:view:background:)` to access.
+    init(
+        item: Binding<Item?>,
+        buildAttributes: @escaping ((inout Popover.Attributes) -> Void) = { _ in },
+        @ViewBuilder view: @escaping (Item) -> MainContent,
+        @ViewBuilder background: @escaping (() -> BackgroundContent)
+    ) {
+        _item = item
+        self.buildAttributes = buildAttributes
+        self.view = view
+        self.background = background
+    }
+
+    var body: some View {
+        WindowReader { readWindow in
+            Color.clear
+
+            /// Read the frame of the source view.
+                .frameReader { frame in
+                    sourceFrame = frame
+                }
+
+            /// Detect a state change in `$present`.
+                .onValueChange(of: item?.id) { oldValue, newValue in
+                    /// Make sure there is a window first.
+                    var window: UIWindow! = readWindow
+                    if window == nil {
+                        print("[Popovers] - No window was found when presenting popover, falling back to key window. Please file a bug report (https://github.com/aheze/Popovers/issues).")
+
+                        if let keyWindow = UIApplication.shared.windows.first(where: \.isKeyWindow) {
+                            window = keyWindow
+                        } else {
+                            print("[Popovers] - Key window was not found either, skipping popover presentation.")
+                            self.item = nil
+                            self.popover = nil /// Remove the reference to the popover.
+                            return
+                        }
+                    }
+
+                    /// `newValue` is not nil, so present the popover.
+                    if newValue != nil, let item = item {
+                        guard popover == nil else { return }
+                        var attributes = Popover.Attributes()
+
+                        /// Set the attributes' tag as `self.tag`.
+                        attributes.tag = newValue
+
+                        /// Set the default source frame to the source view.
+                        attributes.sourceFrame = {
+                            if case .absolute = attributes.position {
+                                return sourceFrame ?? .zero
+                            } else {
+                                return window.safeAreaLayoutGuide.layoutFrame
+                            }
+                        }
+
+                        /// Build the attributes using the closure. If you supply a custom source frame, the default will be overridden.
+                        buildAttributes(&attributes)
+
+                        let popover = Popover(
+                            attributes: attributes,
+                            view: { view(item) },
+                            background: { background() }
+                        )
+
+                        /// Store a reference to the popover.
+                        self.popover = popover
+
+                        /**
+                         Listen to the internal `onDismiss` callback.
+
+                         This is called just after the popover is removed from the model.
+                         */
+                        popover.context.onAutoDismiss = {
+                            self.item = nil
+                            self.popover = nil /// Remove the reference to the popover.
+                        }
+
+                        /// If an old selection with the same tag exists, animate the change.
+                        if let oldValue = oldValue, let oldPopover = window.popover(tagged: oldValue) {
+                            oldPopover.replace(with: popover)
+                        } else if let samePopover = window.popoverModel.popovers.first(where: { $0.id == popover.id || $0.attributes.tag == popover.attributes.tag }) {
+                            samePopover.replace(with: popover)
+                        } else {
+                            /// Otherwise, present the popover.
+                            popover.present(in: window)
+                        }
+
+                    } else {
+                        /// `$item` was set to `nil`, dismiss the popover.
+
+                        /// If there is still a popover, it means the client set `$present` to false.
+                        guard let popover = popover else { return }
+
+                        popover.dismiss()
+                    }
+                }
+        }
+    }
+}
+
+/**
  Present a popover that can transition to another popover in SwiftUI. Access using `.popover(selection:tag:attributes:view:)`.
  */
 struct MultiPopoverModifier: ViewModifier {
@@ -338,6 +487,34 @@ public extension View {
         return modifier(
             PopoverModifier(
                 present: present,
+                buildAttributes: buildAttributes,
+                view: view,
+                background: background
+            )
+        )
+    }
+
+    /**
+     Popover for SwiftUI with a background.
+     - parameter item: A binding to an optional source of truth for the popover.
+       When `item` is non-`nil`, the system `Popovers` the contents to
+       the modifier's closure. You use this content to populate the fields
+       of a popover that you create that the `Popovers` displays to the user.
+       If `item` changes, the `Popovers` dismisses the currently presented
+       popover and replaces it with a new popover using the same process.
+     - parameter attributes: The popover's attributes.
+     - parameter view: The popover's view.
+     - parameter background: The popover's background.
+     */
+    func popover<Item: Identifiable, MainContent: View, BackgroundContent: View>(
+        item: Binding<Item?>,
+        attributes buildAttributes: @escaping ((inout Popover.Attributes) -> Void) = { _ in },
+        @ViewBuilder view: @escaping (Item) -> MainContent,
+        @ViewBuilder background: @escaping (() -> BackgroundContent) = { Color.clear }
+    ) -> some View {
+        return modifier(
+            PopoverWithItemModifier(
+                item: item,
                 buildAttributes: buildAttributes,
                 view: view,
                 background: background
