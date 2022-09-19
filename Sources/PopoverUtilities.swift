@@ -29,20 +29,16 @@ public extension Optional where Wrapped: UIView {
 public extension View {
     /// Read a view's frame. From https://stackoverflow.com/a/66822461/14351818
     func frameReader(in coordinateSpace: CoordinateSpace = .global, rect: @escaping (CGRect) -> Void) -> some View {
-        return background(
+        background(
             GeometryReader { geometry in
-                let frame = geometry.frame(in: coordinateSpace)
-
-                Color.clear
-                    .onValueChange(of: frame) { _, newValue in
-                        rect(newValue)
-                    }
-                    .onAppear {
-                        rect(frame)
-                    }
+                Spacer()
+                    .preference(
+                        key: ContentFrameReaderPreferenceKey.self,
+                        value: geometry.frame(in: coordinateSpace)
+                    )
             }
-            .hidden()
         )
+        .onPreferenceChange(ContentFrameReaderPreferenceKey.self, perform: rect)
     }
 
     /**
@@ -51,9 +47,9 @@ public extension View {
      From https://stackoverflow.com/a/66822461/14351818
      */
     func sizeReader(transaction: Transaction? = nil, size: @escaping (CGSize) -> Void) -> some View {
-        return background(
+        background(
             GeometryReader { geometry in
-                Color.clear
+                Spacer()
                     .preference(key: ContentSizeReaderPreferenceKey.self, value: geometry.size)
                     .onPreferenceChange(ContentSizeReaderPreferenceKey.self) { newValue in
                         DispatchQueue.main.async {
@@ -66,13 +62,12 @@ public extension View {
                         }
                     }
             }
-            .hidden()
         )
     }
 }
 
 struct ContentFrameReaderPreferenceKey: PreferenceKey {
-    static var defaultValue: CGRect { return CGRect() }
+    static var defaultValue: CGRect = .zero
     static func reduce(value: inout CGRect, nextValue: () -> CGRect) { value = nextValue() }
 }
 
